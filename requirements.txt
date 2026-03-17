@@ -1,0 +1,27 @@
+#py -3.11 -m venv venv
+#venv\Scripts\activate
+#pip install -r requirements.txt
+# arXiv fetching
+arxiv>=1.4.6
+
+# Data handling
+pandas>=2.1.0
+
+# Cassandra driver
+cassandra-driver>=3.25.0
+
+# For validating data
+pydantic>=2.2.1
+
+# Dagster (optional, for later)
+dagster>=1.5.0
+dagit>=1.5.0
+
+# Spark (for local testing / Databricks later)
+pyspark>=3.5.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=8.2.0
