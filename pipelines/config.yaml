@@ -1,0 +1,275 @@
+# Dagster Pipeline Configuration
+# This file defines runtime parameters for assets, resources, and jobs
+
+---
+
+# ============================================================================
+# RESOURCES CONFIGURATION
+# ============================================================================
+
+resources:
+
+  # Cassandra Connection Pool
+  cassandra_resource:
+    config:
+      # Contact points: List of Cassandra node addresses
+      contact_points:
+        - "localhost:9042"
+      
+      # Keyspace: Target database namespace
+      keyspace: "arxiv"
+      
+      # Consistency level: Read/Write consistency guarantee
+      # Options: ONE, LOCAL_QUORUM, QUORUM, ALL
+      # LOCAL_QUORUM = read from 2 replicas in local DC, best for single-DC
+      consistency_level: "LOCAL_QUORUM"
+      
+      # Connection pool size: Number of connections to maintain
+      pool_size: 5
+      
+      # Query timeout in seconds: Max time to wait for response
+      timeout: 10.0
+
+  # ArxivClient Configuration
+  arxiv_client_resource:
+    config:
+      # Papers fetched per API request
+      # Higher = fewer API calls but larger responses
+      batch_size: 100
+      
+      # API request timeout in seconds
+      timeout: 30.0
+      
+      # Max retries on API failure
+      max_retries: 3
+
+---
+
+# ============================================================================
+# OPS/ASSETS CONFIGURATION
+# ============================================================================
+
+ops:
+
+  # Asset 1: Fetch arXiv papers
+  fetch_arxiv_papers:
+    config:
+      # Papers per category (5 categories total)
+      batch_size: 100
+      
+      # CS domains to fetch papers from
+      # Options: cs.AI, cs.LG, cs.CV, cs.CL, stat.ML, cs.DB, cs.DC, etc.
+      categories:
+        - "cs.AI"        # Artificial Intelligence
+        - "cs.LG"        # Machine Learning
+        - "cs.CV"        # Computer Vision
+        - "cs.CL"        # Computational Linguistics
+        - "stat.ML"      # Statistics - Machine Learning
+      
+      # Optional: Filter by publication date (YYYY-MM-DD)
+      # min_date: "2020-01-01"  # Fetch papers from this date onwards
+      # max_date: null          # Fetch up to today (null = today)
+
+  # Asset 2: Validate papers
+  validate_papers:
+    config:
+      # Behavior on invalid papers: drop (continue) or raise (fail)
+      drop_invalid: true
+
+  # Asset 3: Store in Cassandra
+  store_in_cassandra:
+    config:
+      # Batch size for Cassandra inserts
+      # Cassandra recommends keeping batches small (< 100 rows)
+      chunk_size: 25
+      
+      # Consistency level for writes
+      consistency_level: "LOCAL_QUORUM"
+
+---
+
+# ============================================================================
+# JOBS CONFIGURATION
+# ============================================================================
+
+jobs:
+  daily_ingestion_job:
+    # Resources used by this job
+    resource_defs:
+      cassandra_resource:
+        config:
+          contact_points:
+            - "localhost:9042"
+          keyspace: "arxiv"
+          consistency_level: "LOCAL_QUORUM"
+      
+      arxiv_client_resource:
+        config:
+          batch_size: 100
+          timeout: 30.0
+          max_retries: 3
+    
+    # Tags for job organization and filtering
+    tags:
+      owner: "data-engineering"
+      team: "analytics"
+      sla: "2:00 AM UTC"
+      critical: "true"
+    
+    # Hooks configuration (future use)
+    # hooks:
+    #   success: notify_slack_success
+    #   failure: notify_slack_failure
+
+---
+
+# ============================================================================
+# SCHEDULE CONFIGURATION
+# ============================================================================
+
+schedules:
+  daily_ingestion_schedule:
+    # Cron expression: minute hour day month weekday
+    # "0 2 * * *" = Every day at 02:00 UTC (2 AM)
+    cron: "0 2 * * *"
+    
+    # Timezone for cron interpretation
+    timezone: "UTC"
+    
+    # Description shown in Dagit
+    description: "Daily arXiv papers ingestion at 2:00 AM UTC"
+    
+    # Tags
+    tags:
+      frequency: "daily"
+      time: "2:00 AM UTC"
+
+---
+
+# ============================================================================
+# ENVIRONMENT-SPECIFIC OVERRIDES
+# ============================================================================
+
+# Use these sections to override configs per environment
+# Example: dagit -f dagster_pipeline.py --config config-prod.yaml
+
+environments:
+  
+  development:
+    resources:
+      cassandra_resource:
+        config:
+          contact_points:
+            - "localhost:9042"
+          keyspace: "arxiv"
+          pool_size: 2
+          timeout: 10.0
+  
+  staging:
+    resources:
+      cassandra_resource:
+        config:
+          contact_points:
+            - "cassandra-staging.example.com:9042"
+          keyspace: "arxiv_staging"
+          pool_size: 5
+          timeout: 10.0
+  
+  production:
+    resources:
+      cassandra_resource:
+        config:
+          contact_points:
+            - "cassandra1.example.com:9042"
+            - "cassandra2.example.com:9042"
+            - "cassandra3.example.com:9042"
+          keyspace: "arxiv"
+          pool_size: 20
+          timeout: 10.0
+          consistency_level: "LOCAL_QUORUM"
+
+---
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# ============================================================================
+
+logging:
+  version: 1
+  
+  formatters:
+    default:
+      format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    json:
+      format: '{"timestamp": "%(asctime)s", "logger": "%(name)s", "level": "%(levelname)s", "message": "%(message)s"}'
+  
+  handlers:
+    console:
+      class: logging.StreamHandler
+      level: INFO
+      formatter: default
+      stream: ext://sys.stdout
+    
+    file:
+      class: logging.FileHandler
+      level: DEBUG
+      formatter: json
+      filename: logs/dagster.log
+  
+  loggers:
+    # Dagster core logs
+    dagster:
+      level: INFO
+      handlers:
+        - console
+        - file
+    
+    # Our pipeline logs
+    pipelines:
+      level: DEBUG
+      handlers:
+        - console
+        - file
+  
+  root:
+    level: INFO
+    handlers:
+      - console
+      - file
+
+
+# ============================================================================
+# MONITORING & ALERTING (Future)
+# ============================================================================
+
+# monitoring:
+#   slack:
+#     webhook_url: "${SLACK_WEBHOOK_URL}"
+#     on_success: true
+#     on_failure: true
+#     on_skip: false
+#   
+#   email:
+#     recipient: "data-team@example.com"
+#     on_failure: true
+#   
+#   datadog:
+#     api_key: "${DATADOG_API_KEY}"
+#     site: "datadoghq.com"
+
+# ============================================================================
+# RETENTION & STORAGE (Future)
+# ============================================================================
+
+# storage:
+#   event_log:
+#     class: SqliteEventLogStorage
+#     base_dir: .dagster/storage
+#   
+#   run_storage:
+#     class: SqliteRunStorage
+#     base_dir: .dagster/storage
+#   
+#   io_manager:
+#     class: FilesystemIOManager
+#     base_dir: .dagster/storage/outputs

@@ -15,22 +15,102 @@ A production-grade **ETL + ELT** data engineering pipeline that fetches research
 ### Architecture at a Glance
 
 ```
+┌─────────────────────────────────────────────────────────────────────┐
+│                       COMPLETE DATA PIPELINE                        │
+└─────────────────────────────────────────────────────────────────────┘
+
 🌐 arXiv API
     ↓ (500-1000 papers)
-📥 ETL: Extract → Validate → Load (30-40s)
-    ├─ ingestion/arxiv_client.py (API client)
-    ├─ ingestion/validation.py (Pydantic schema)
-    └─ casandra/insert_papers.py (Cassandra)
+┌─────────────────────────────────────────────────────────────────────┐
+│ 📥 ETL PHASE: Extract → Validate → Load (30-40s)                   │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│ ├─ ingestion/arxiv_client.py      (API client)                    │
+│ ├─ ingestion/fetch_papers.py       (Batch fetcher)                │
+│ ├─ ingestion/validation.py         (Pydantic schema)              │
+│ └─ casandra/insert_papers.py       (Cassandra load)               │
+│                                                                     │
+│ 🎯 Orchestration: Dagster                                         │
+│ ├─ pipelines/dagster_pipeline.py  (Main entrypoint)               │
+│ ├─ pipelines/assets/fetch.py       (@asset fetch)                 │
+│ ├─ pipelines/assets/validate.py    (@asset validate)              │
+│ └─ pipelines/assets/store.py       (@asset store)                 │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+    ↓ (450-950 papers)
+┌─────────────────────────────────────────────────────────────────────┐
+│ 🐳 INFRASTRUCTURE (Docker Compose)                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│ 💾 Cassandra 5.0         (papers_raw table)                        │
+│ ├─ Keyspace: arxiv                                                 │
+│ ├─ Cluster: arxiv_cluster                                          │
+│ ├─ Port: 9042                                                      │
+│ └─ Replication: 1 (local dev)                                      │
+│                                                                     │
+│ 🚀 Kafka 7.5.0 + Zookeeper 7.5.0  (Event Streaming)               │
+│ ├─ Broker: kafka_arxiv                                             │
+│ ├─ Topics: papers-raw, papers-processed                            │
+│ ├─ Port: 9092 (internal), 9094 (docker)                            │
+│ └─ Retention: 24 hours                                             │
+│                                                                     │
+│ 📊 PostgreSQL 15         (Dagster Metadata)                        │
+│ ├─ Database: dagster_db                                            │
+│ ├─ User: dagster_user                                              │
+│ ├─ Port: 5432                                                      │
+│ └─ Tables: job_runs, asset_logs, events                            │
+│                                                                     │
+│ 🎯 Monitoring:                                                     │
+│ ├─ Kafdrop (Kafka UI): http://localhost:9000                       │
+│ ├─ Dagit (Orchestration): http://localhost:3000                    │
+│ └─ Cassandra (9042), PostgreSQL (5432)                             │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+    ↓ (Data flowing to streams & storage)
+┌─────────────────────────────────────────────────────────────────────┐
+│ 📊 ELT PHASE: Bronze → Silver → Gold → Graph (~45min)             │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│ 📦 BRONZE: Extract Cassandra → Parquet                            │
+│ └─ databricks/bronze_layer.py    (450-950 rows, 100% raw)         │
+│                                                                     │
+│ 🧹 SILVER: Clean & Enrich                                         │
+│ └─ databricks/silver_layer.py    (~1,575-3,325 rows, exploded)   │
+│                                                                     │
+│ ✨ GOLD: Analytics (4 tables)                                      │
+│ └─ databricks/gold_layer.py      (papers_per_year, category...)   │
+│                                                                     │
+│ 🔗 GRAPH: Network Analysis (3 tables)                             │
+│ └─ databricks/graph_layer.py     (author_edges, trends...)        │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+    ↓ (Parquet/Delta tables)
+┌─────────────────────────────────────────────────────────────────────┐
+│ 🌐 API REST LAYER (FastAPI)                                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│ 📡 Endpoints (Optional - can be added):                            │
+│ ├─ GET /api/papers                (List all papers)                │
+│ ├─ GET /api/papers/{arxiv_id}     (Paper details)                 │
+│ ├─ GET /api/authors               (Authors analytics)              │
+│ ├─ GET /api/categories            (Category trends)                │
+│ ├─ GET /api/trends                (Research trends)                │
+│ ├─ POST /api/export               (Trigger export)                 │
+│ └─ GET /api/health                (Service health)                 │
+│                                                                     │
+│ Port: 8000 (http://localhost:8000)                                 │
+│ Docs: http://localhost:8000/docs  (Swagger UI)                     │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
     ↓
-💾 Cassandra (450-950 papers stored)
-    ↓
-📊 ELT: Bronze → Silver → Gold → Graph (~45min)
-    ├─ Bronze: Raw extraction
-    ├─ Silver: Clean & enrich (explode authors)
-    ├─ Gold: Analytics (4 tables)
-    └─ Graph: Network analysis (3 tables)
-    ↓
-📈 Outputs: Parquet/Delta files → Dashboards, BI, Web Apps
+┌─────────────────────────────────────────────────────────────────────┐
+│ 📈 VISUALIZATION LAYER                                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│ ├─ 💼 Databricks Dashboards  (SQL + Notebooks)                    │
+│                      │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -49,6 +129,247 @@ A production-grade **ETL + ELT** data engineering pipeline that fetches research
 | ✅ **Fully Containerized** | Docker Compose for local development |
 | ✅ **Monitoring & Logging** | JSON structured logs + Prometheus metrics |
 | ✅ **Export Capability** | Parquet files for downstream tools |
+
+---
+
+## 🐳 Docker Infrastructure (docker-compose.yml)
+
+### Services Overview
+
+| Service | Image | Port(s) | Purpose | Status Check |
+|---------|-------|---------|---------|--------------|
+| **Cassandra** | `cassandra:5.0` | 9042, 7199 | NoSQL database | `nodetool status` |
+| **Kafka** | `confluentinc/cp-kafka:7.5.0` | 9092, 9094 | Event streaming broker | `kafka-broker-api-versions` |
+| **Zookeeper** | `confluentinc/cp-zookeeper:7.5.0` | 2181 | Kafka coordination | Port check |
+| **Kafdrop** | `obsidiandynamics/kafdrop:latest` | 9000 | Kafka UI monitoring | http://localhost:9000 |
+| **PostgreSQL** | `postgres:15-alpine` | 5432 | Dagster metadata store | `pg_isready` |
+
+### Docker Compose Configuration
+
+```yaml
+version: '3.8'
+
+services:
+  # Database Layer
+  cassandra:
+    image: cassandra:5.0
+    ports:
+      - "9042:9042"    # CQL port
+      - "7199:7199"    # JMX port
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+      - ./casandra/schema.cql:/schema.cql:ro
+    environment:
+      CASSANDRA_CLUSTER_NAME: arxiv_cluster
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_RACK: rack1
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe cluster"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  # Streaming Layer
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    ports:
+      - "9092:9092"    # External
+      - "9094:9094"    # Docker
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 24
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # Kafka Monitoring UI
+  kafdrop:
+    image: obsidiandynamics/kafdrop:latest
+    ports:
+      - "9000:9000"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERCONNECT: "kafka:9094"
+
+  # Metadata Database
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: dagster_user
+      POSTGRES_PASSWORD: dagster_pass
+      POSTGRES_DB: dagster_db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dagster_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  cassandra_data:
+  postgres_data:
+
+networks:
+  default:
+    name: arxiv_network
+```
+
+---
+
+## 🌐 REST API Layer (FastAPI)
+
+### Overview
+Optional FastAPI layer to expose analytics data and pipeline control.
+
+### Key Features
+- **Async Processing:** Built on FastAPI/Uvicorn
+- **Auto Documentation:** Swagger UI at `/docs`
+- **Health Checks:** Liveness & readiness probes
+- **Rate Limiting:** Protect API from overload
+- **CORS Support:** Cross-origin requests
+- **Authentication:** Optional JWT tokens
+
+### Proposed Endpoints
+
+```python
+# GET endpoints (Read-only)
+GET /api/v1/papers              # List all papers with pagination
+GET /api/v1/papers/{arxiv_id}   # Get paper details
+GET /api/v1/papers/search       # Search papers by title/author/category
+GET /api/v1/authors             # List top authors
+GET /api/v1/authors/{author}    # Author details & papers
+GET /api/v1/categories          # Category analytics
+GET /api/v1/categories/{cat}    # Category papers & trends
+GET /api/v1/trends              # Research trends (growth rates)
+GET /api/v1/graphs/coauthors    # Co-authorship network
+GET /api/v1/graphs/network      # Author network metrics
+
+# POST endpoints (Write/Control)
+POST /api/v1/pipeline/trigger   # Trigger ETL pipeline manually
+POST /api/v1/export             # Trigger export to Parquet
+POST /api/v1/papers/batch       # Batch insert (admin only)
+
+# Admin endpoints
+GET /api/v1/health              # Service health check
+GET /api/v1/metrics             # Prometheus metrics
+GET /api/v1/logs                # Recent logs
+```
+
+### Example FastAPI Server
+
+```python
+# main_api.py (can be added to project)
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import json
+
+app = FastAPI(
+    title="Research Papers API",
+    description="ETL+ELT Pipeline API",
+    version="1.0.0"
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/api/v1/health")
+async def health():
+    return {"status": "healthy"}
+
+@app.get("/api/v1/papers")
+async def list_papers(skip: int = 0, limit: int = 10):
+    # Query Cassandra or Parquet
+    pass
+
+@app.post("/api/v1/pipeline/trigger")
+async def trigger_pipeline():
+    # Call Dagster API to trigger run
+    pass
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+```
+
+### Running the API
+
+```bash
+# Install dependencies
+pip install fastapi uvicorn python-dotenv
+
+# Run API server
+python main_api.py
+
+# Access:
+# - API Docs: http://localhost:8000/docs
+# - ReDoc: http://localhost:8000/redoc
+# - API Root: http://localhost:8000/api/v1/health
+```
+
+### Integration with Kafka
+
+```python
+# Produce events to Kafka when data changes
+from kafka import KafkaProducer
+import json
+
+producer = KafkaProducer(
+    bootstrap_servers=['localhost:9092'],
+    value_serializer=lambda v: json.dumps(v).encode('utf-8')
+)
+
+# Example: Publish when new batch is stored
+def on_batch_stored(batch_id, count):
+    producer.send('papers-processed', {
+        'batch_id': str(batch_id),
+        'paper_count': count,
+        'timestamp': datetime.now().isoformat()
+    })
+```
+
+### Integration with Cassandra
+
+```python
+# Query data for API responses
+from cassandra.cluster import Cluster
+
+cluster = Cluster(['cassandra_arxiv'])
+session = cluster.connect('arxiv')
+
+@app.get("/api/v1/papers/{arxiv_id}")
+async def get_paper(arxiv_id: str):
+    result = session.execute(
+        "SELECT * FROM papers_raw WHERE arxiv_id = %s",
+        [arxiv_id]
+    )
+    return result.one()
+```
 
 ---
 
@@ -400,42 +721,197 @@ python scripts/export_to_parquet.py
 
 ---
 
-## 🔄 Complete Execution Flow
+---
+
+## 🚀 Kafka Event Streaming Layer
+
+### Topics Configuration
+
+| Topic | Partitions | Retention | Producer | Consumer | Purpose |
+|-------|-----------|-----------|----------|----------|---------|
+| `papers-raw` | 1 | 24h | Dagster ETL | Spark (optional) | Raw papers from arXiv |
+| `papers-processed` | 1 | 24h | Cassandra Insert | Analytics (optional) | Processed papers events |
+| `errors` | 1 | 24h | Any component | Monitoring | Error tracking |
+
+### Kafka Usage
+
+```bash
+# Create topics manually (auto-create is enabled)
+docker exec kafka_arxiv kafka-topics \
+  --create \
+  --topic papers-raw \
+  --bootstrap-server localhost:9092 \
+  --partitions 1 \
+  --replication-factor 1
+
+# List topics
+docker exec kafka_arxiv kafka-topics \
+  --list \
+  --bootstrap-server localhost:9092
+
+# View messages in topic
+docker exec kafka_arxiv kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic papers-raw \
+  --from-beginning \
+  --max-messages 10
+
+# Monitor topic via Kafdrop UI
+open http://localhost:9000
+```
+
+### Python Kafka Producer (Publish Events)
+
+```python
+# Optional: Publish paper events
+from kafka import KafkaProducer
+import json
+from datetime import datetime
+
+producer = KafkaProducer(
+    bootstrap_servers=['localhost:9092'],
+    value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+    acks='all',  # Wait for all replicas
+    retries=3
+)
+
+def publish_paper_stored(batch_id, paper_count, arxiv_ids):
+    event = {
+        'batch_id': str(batch_id),
+        'paper_count': paper_count,
+        'arxiv_ids': arxiv_ids,
+        'timestamp': datetime.now().isoformat(),
+        'source': 'cassandra_insert'
+    }
+    producer.send('papers-processed', event)
+    print(f"✅ Published: {batch_id}")
+```
+
+### Python Kafka Consumer (Consume Events)
+
+```python
+# Optional: Spark streaming consumer
+from kafka import KafkaConsumer
+import json
+
+consumer = KafkaConsumer(
+    'papers-raw',
+    bootstrap_servers=['localhost:9092'],
+    auto_offset_reset='earliest',
+    value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+    group_id='spark-processing-group'
+)
+
+def process_stream():
+    for message in consumer:
+        print(f"📨 Received: {message.value}")
+        # Process message
+        # Example: Transform + Load to analytics table
+
+process_stream()
+```
+
+### Integration Points
 
 ```
-TIME 00:00 UTC
-  ↓
-🎯 Dagster Schedule Triggers
-  ├─ daily_ingestion_schedule @ 2 AM UTC
-  └─ Executes: daily_ingestion_job
-  ↓
-📥 EXTRACT (5-10s)
-  ├─ ArxivClient.search_papers() → 5 categories
-  ├─ PaperFetcher.fetch_papers() → 500-1000 papers
-  └─ Asset: fetch_arxiv_papers → Dagit tracked
-  ↓
-🔍 VALIDATE (5s)
-  ├─ Pydantic PaperModel validation
-  ├─ DataQualityValidator checks
-  ├─ Dropout rate: ~5% (450-950 valid)
-  └─ Asset: validate_papers → Dagit tracked
-  ↓
-💾 LOAD (15s)
-  ├─ Chunk into 25-paper batches
-  ├─ Docker cqlsh execution
-  ├─ batch_id UUID tracking
-  └─ Asset: store_in_cassandra → Summary output
-  ↓
-TIME 00:01 → Data in Cassandra papers_raw table
-  ↓
-📊 ANALYTICS (40+ minutes)
-  ├─ 2 min: Bronze layer (Extract Cassandra)
-  ├─ 5 min: Silver layer (Clean & Transform)
-  ├─ 10 min: Gold layer (Aggregations)
-  ├─ 8 min: Graph layer (Network analysis)
-  └─ Outputs: Parquet files ready for BI/dashboards
-  ↓
-TIME 00:45 → Complete ELT+ETL Pipeline ✅
+arXiv API
+    ↓
+Dagster ETL
+    ↓
+Kafka Topic: papers-raw
+    ↙          ↘
+Cassandra   Optional:
+(direct)    Spark Streaming
+                ↓
+            Real-time Analytics
+```
+
+---
+
+## 🔄 Complete Execution Flow (All Components Integrated)
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                    COMPLETE SYSTEM FLOW                           │
+└────────────────────────────────────────────────────────────────────┘
+
+💻 LOCAL ENVIRONMENT (Windows/Mac/Linux)
+┌────────────────────────────────────────────────────────────────────┐
+│ docker-compose up -d                                              │
+│ ├─ Cassandra 5.0 (Port 9042)                                      │
+│ ├─ Kafka 7.5.0 + Zookeeper (Ports 2181, 9092)                    │
+│ ├─ Kafdrop UI (Port 9000)                                         │
+                                    │
+│                                                                   │
+│ ✅ Status: All services healthy                                   │
+└────────────────────────────────────────────────────────────────────┘
+
+TIME 00:00 UTC - Dagster Scheduler Triggers
+│
+├─ 🎯 EVENT: daily_ingestion_schedule fires
+│   └─ Executes: daily_ingestion_job
+│
+├─ 📥 STEP 1: EXTRACT (5-10 seconds)
+│   ├─ ArxivClient.search_papers() [5 categories]
+│   ├─ PaperFetcher.fetch_papers() [500-1000 papers]
+│   └─ Dagster Asset: fetch_arxiv_papers ✅
+│
+├─ 🔍 STEP 2: VALIDATE (5 seconds)
+│   ├─ Pydantic schema validation (13 fields)
+│   ├─ DataQualityValidator checks
+│   ├─ Result: 450-950 papers (95% success)
+│   └─ Dagster Asset: validate_papers ✅
+│
+├─ 💾 STEP 3: LOAD TO CASSANDRA (15 seconds)
+│   ├─ Connect to cassandra_arxiv (port 9042)
+│   ├─ Batch insert (25 papers at a time)
+│   ├─ PRIMARY KEY: (batch_id, arxiv_id)
+│   ├─ INSERT 450-950 rows into papers_raw table
+│   ├─ 📨 Publish to Kafka: papers-processed topic
+│   └─ Dagster Asset: store_in_cassandra ✅
+│
+├─ 🌐 STEP 4: REST API AVAILABLE (Real-time)
+│   ├─ Cassandra now has papers_raw data
+│   ├─ FastAPI queries available:
+│   │  ├─ GET /api/v1/papers
+│   │  ├─ GET /api/v1/papers/{arxiv_id}
+│   │  ├─ GET /api/v1/authors
+│   │  ├─ GET /api/v1/categories
+│   │  └─ GET /api/v1/trends
+│   │
+│   └─ Swagger UI: http://localhost:8000/docs
+│
+├─ ⏱️  TIME 00:01 UTC - ETL COMPLETE ✅
+│   └─ Data in: Cassandra + Kafka topics
+│
+├─ 📊 STEP 5-8: ELT PHASE (~40-45 minutes)
+│   │
+│   ├─ 2 min: BRONZE Layer
+│   │  └─ Cassandra → /mnt/data/papers_bronze_parquet
+│   │
+│   ├─ 5 min: SILVER Layer  
+│   │  └─ Clean/Explode → /mnt/data/papers_silver_parquet
+│   │
+│   ├─ 10 min: GOLD Layer (Analytics)
+│   │  └─ Aggregations → /mnt/data/papers_gold/
+│   │
+│   └─ 8 min: GRAPH Layer (Network)
+│      └─ Co-authorships → /mnt/data/papers_graph/
+│
+└─ ⏱️  TIME 00:45 UTC - COMPLETE PIPELINE ✅
+
+
+SYSTEM MONITORING (24/7)
+├─ 🎯 Dagit UI (http://localhost:3000)
+│  └─ Asset execution tracking & logs
+├─ 📊 Kafdrop UI (http://localhost:9000)
+│  └─ Kafka topics & message monitoring
+├─ 🌐 FastAPI (http://localhost:8000)
+│  └─ Real-time paper data & analytics queries
+├─ 🗄️  Cassandra (port 9042)
+│  └─ Direct SQL queries on papers_raw
+└─ 📈 PostgreSQL (port 5432)
+   └─ Dagster metadata & job history
 ```
 
 ---
@@ -523,6 +999,283 @@ kubectl logs -f deployment/arxiv-pipeline
   5. Docker build & push
   6. Performance testing
   7. Documentation
+
+---
+
+## 🏛️ Architecture Summary - All Components Integrated
+
+### Complete Technology Stack
+
+```
+DATA SOURCE LAYER
+├─ arXiv API (External REST API)
+│  └─ 5 categories: cs.AI, cs.LG, cs.CV, cs.CL, stat.ML
+│
+INGESTION LAYER (Python)
+├─ ingestion/arxiv_client.py (API Client)
+├─ ingestion/fetch_papers.py (Batch Fetcher - 500-1000 papers)
+├─ ingestion/validation.py (Pydantic Validation - 95% success)
+│
+ORCHESTRATION LAYER (Dagster)
+├─ pipelines/dagster_pipeline.py (Main entrypoint)
+├─ pipelines/assets/fetch.py (@asset orchestration)
+├─ pipelines/assets/validate.py (@asset orchestration)
+├─ pipelines/assets/store.py (@asset orchestration)
+│
+INFRASTRUCTURE LAYER (Docker Compose)
+├─ Cassandra 5.0 (NoSQL storage - port 9042)
+│  └─ papers_raw table with batch_id tracking
+├─ Kafka 7.5.0 + Zookeeper (Event streaming - ports 2181, 9092)
+│  ├─ Topic: papers-raw (24h retention)
+│  └─ Topic: papers-processed (24h retention)
+├─ PostgreSQL 15 (Dagster metadata - port 5432)
+├─ Kafdrop (Kafka UI - port 9000)
+│
+STREAMING LAYER (Kafka)
+├─ Event producers: Dagster ETL
+├─ Event topics: papers-raw, papers-processed
+├─ Event consumers: Optional Spark Streaming, Analytics
+│
+API LAYER (FastAPI) - Optional Add-on
+├─ GET /api/v1/papers (List papers)
+├─ GET /api/v1/papers/{arxiv_id} (Paper details)
+├─ GET /api/v1/authors (Author analytics)
+├─ GET /api/v1/categories (Category trends)
+├─ GET /api/v1/trends (Research trends)
+├─ POST /api/v1/pipeline/trigger (Manual runs)
+│  └─ Port: 8000 (http://localhost:8000)
+│
+ANALYTICS LAYER (Apache Spark + Databricks)
+├─ Bronze Layer (Extract) - 450-950 rows
+├─ Silver Layer (Transform) - ~1,575-3,325 rows (exploded)
+├─ Gold Layer (Aggregate) - 4 analytics tables
+├─ Graph Layer (Network) - 3 network tables
+│
+OUTPUT LAYER
+├─ Parquet files (/mnt/data/papers_*/)
+├─ Delta Lake tables (optional)
+├─ Databricks dashboards
+├─ Power BI / Tableau visualizations
+└─ FastAPI JSON responses (if API enabled)
+```
+
+### Data Flow
+
+```
+arXiv API
+   ↓
+[Dagster ETL Orchestration]
+   ├─ Extract (500-1000 papers)
+   ├─ Validate (450-950 papers, 95% success)
+   └─ Load
+      ├─ → Cassandra papers_raw table
+      └─ → Kafka papers-processed topic
+   ↓
+[Docker Infrastructure]
+   ├─ Cassandra: Storage for papers
+   ├─ Kafka: Event streaming
+   ├─ PostgreSQL: Dagster metadata
+   └─ Monitoring: Kafdrop, Dagit
+   ↓
+[FastAPI REST API] (Optional)
+   ├─ Real-time queries on Cassandra
+   ├─ Access to papers data
+   └─ Export triggers
+   ↓
+[Apache Spark Analytics] 
+   ├─ Bronze: Extract Cassandra
+   ├─ Silver: Transform + Enrich
+   ├─ Gold: Aggregate analytics
+   └─ Graph: Network analysis
+   ↓
+[Visualization Layer]
+   ├─ Databricks dashboards
+   ├─ BI tools (Power BI, Tableau)
+   ├─ Custom applications
+   └─ FastAPI frontend (if enabled)
+```
+
+### Component Interaction Matrix
+
+| Component | Receives From | Sends To | Protocol |
+|-----------|---------------|----------|----------|
+| arXiv API | - | Dagster | HTTP REST |
+| Dagster | arXiv API | Cassandra, Kafka | In-process |
+| Cassandra | Dagster | FastAPI, Spark | CQL |
+| Kafka | Dagster, Insert ops | Spark (optional) | Binary |
+| FastAPI | Client requests | Cassandra queries | HTTP REST |
+| PostgreSQL | Dagster | - | SQL |
+| Spark | Cassandra, Kafka | Parquet files | In-process |
+| Kafdrop | - | Client UI | HTTP |
+| Dagit | - | Client UI | HTTP |
+
+---
+
+## 🎯 Key Features by Component
+
+### Docker Infrastructure Features
+✅ Pre-configured docker-compose.yml with all services  
+✅ Health checks for all containers  
+✅ Named volumes for persistence  
+✅ Custom network (arxiv_network) for service communication  
+✅ Auto-creation of Kafka topics  
+✅ PostgreSQL database for Dagster state  
+
+### Kafka Features
+✅ Topic auto-creation enabled  
+✅ 24-hour message retention  
+✅ Multiple topics for different event types  
+✅ Kafdrop UI for topic monitoring  
+✅ Integration with Dagster pipeline events  
+
+### FastAPI Features (Optional)
+✅ Async processing with Uvicorn  
+✅ Automatic Swagger UI documentation  
+✅ CORS support for cross-origin requests  
+✅ Health checks and readiness probes  
+✅ Direct Cassandra integration for queries  
+✅ Rate limiting capabilities  
+
+### Cassandra Features
+✅ Distributed NoSQL storage  
+✅ papers_raw table with batch_id tracking  
+✅ replication_factor=1 for local dev  
+✅ CQL schema initialization  
+✅ Docker cqlsh access  
+
+---
+
+## 🚀 Quick Start All Components
+
+```bash
+# 1. Start all Docker services
+docker-compose up -d
+
+# 2. Verify services are running
+docker-compose ps
+
+# 3. Launch Dagster Orchestration
+python scripts/launch_dagit.py
+# → http://localhost:3000
+
+# 4. Launch FastAPI (optional)
+pip install fastapi uvicorn
+python main_api.py
+# → http://localhost:8000 (with API)
+# → http://localhost:8000/docs (Swagger UI)
+
+# 5. Monitor Kafka
+# → http://localhost:9000 (Kafdrop UI)
+
+# 6. Run ETL Pipeline
+# Via Dagit UI: Click "Launch Run" on daily_ingestion_job
+# Or via CLI: python scripts/run_ingestion.py
+
+# 7. Check Cassandra
+docker exec -it cassandra_arxiv cqlsh
+# USE arxiv;
+# SELECT COUNT(*) FROM papers_raw;
+
+# 8. Query API (if enabled)
+curl http://localhost:8000/api/v1/papers
+curl http://localhost:8000/api/v1/authors
+```
+
+---
+
+## 🔍 Monitoring & Observability
+
+### Available UIs
+
+| Service | URL | Purpose |
+|---------|-----|---------|
+| **Dagit** | http://localhost:3000 | Pipeline orchestration UI |
+| **Kafdrop** | http://localhost:9000 | Kafka topic management |
+| **FastAPI Docs** | http://localhost:8000/docs | API documentation (if enabled) |
+| **Cassandra** | localhost:9042 | Direct CQL access |
+| **PostgreSQL** | localhost:5432 | Dagster metadata DB |
+
+### CLI Monitoring
+
+```bash
+# Dagster logs
+tail -f .dagster/logs/dagster.log
+
+# Application logs
+tail -f arxiv_pipeline.log
+
+# Kafka topic consumption
+docker exec kafka_arxiv kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic papers-processed \
+  --from-beginning
+
+# Cassandra status
+docker exec cassandra_arxiv nodetool status
+```
+
+---
+
+## 🔄 Complete Execution Flow
+
+### Phase 1: Setup (First Time)
+```
+1. Clone repository
+2. Create virtual environment
+3. Install dependencies (pip install -r requirements.txt)
+4. Start Docker services (docker-compose up -d)
+5. Initialize Cassandra schema (python scripts/setup_cassandra.py)
+```
+
+### Phase 2: Running the Pipeline
+```
+1. Launch Dagster (python scripts/launch_dagit.py)
+2. Navigate to http://localhost:3000
+3. Click on daily_ingestion_job
+4. Click "Launch Run"
+5. Monitor execution in real-time
+```
+
+### Phase 3: Accessing Data
+```
+Option 1 - Via Cassandra:
+  docker exec -it cassandra_arxiv cqlsh
+  SELECT * FROM arxiv.papers_raw LIMIT 5;
+
+Option 2 - Via FastAPI (if enabled):
+  curl http://localhost:8000/api/v1/papers
+
+Option 3 - Via Kafka:
+  docker exec kafka_arxiv kafka-console-consumer \
+    --bootstrap-server localhost:9092 \
+    --topic papers-processed --max-messages 5
+```
+
+### Phase 4: Analytics (ELT)
+```
+1. Export to Parquet: python scripts/export_to_parquet.py
+2. Run Spark transformation on Databricks
+3. Load to Gold/Graph layers for analytics
+```
+
+---
+
+## ✅ Checklist: All Technologies Integrated
+
+- ✅ **arXiv API** - Data source (REST API)
+- ✅ **Python 3.13** - Primary language
+- ✅ **Dagster 1.5.11** - ETL orchestration
+- ✅ **Pydantic 2.5.0** - Data validation
+- ✅ **Cassandra 5.0** - NoSQL database (Docker)
+- ✅ **Kafka 7.5.0** - Event streaming (Docker)
+- ✅ **Zookeeper 7.5.0** - Kafka coordination (Docker)
+- ✅ **PostgreSQL 15** - Dagster metadata (Docker)
+- ✅ **Docker Compose 3.8** - Infrastructure orchestration
+- ✅ **Kafdrop** - Kafka UI monitoring (Docker)
+- ✅ **Apache Spark 3.4.1** - Distributed processing
+- ✅ **Databricks** - Analytics platform (optional)
+- ✅ **FastAPI** - REST API layer (optional)
+- ✅ **GitHub Actions** - CI/CD pipeline (7 stages)
 
 ---
 
@@ -658,4 +1411,4 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) for deta
 **Last Updated:** May 25, 2026  
 **Version:** 4.0  
 **Status:** ✅ Production Ready  
-**Maintainers:** Your Team
+**Maintainers:** Hamza Elmourabit

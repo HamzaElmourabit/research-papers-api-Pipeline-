@@ -1,0 +1,94 @@
+// ETL + ELT Architecture
+digraph "Research Papers Pipeline" {
+	nodesep=0.5 rankdir=TB splines=ortho
+	node [fillcolor=white fontname=Arial fontsize=10 shape=box style="rounded,filled"]
+	arxiv [label="🌐 arXiv API
+Research Papers
+500-1000 papers/day" fillcolor="#fff3e0" shape=cylinder]
+	etl_label [label="PHASE 1: ETL
+(Dagster Orchestration)" fillcolor="#e1f5ff" shape=note style=filled]
+	extract [label="Extract
+
+Fetch from arXiv API
+5 domains: AI, LG, CV, CL, ML" fillcolor="#e1f5ff"]
+	transform [label="Transform
+
+Pydantic Validation
+Schema check
+Duplicate removal" fillcolor="#e1f5ff"]
+	load_etl [label="Load
+
+Insert to Cassandra
+Batch processing
+Error handling" fillcolor="#e1f5ff"]
+	arxiv -> extract [label="Raw Data" fontsize=9]
+	extract -> transform [label="500-1000" fontsize=9]
+	transform -> load_etl [label="450-950 valid" fontsize=9]
+	cassandra [label="📦 Cassandra Database
+
+Table: papers_raw
+18+ records
+Validated data" fillcolor="#fce4ec" shape=cylinder]
+	load_etl -> cassandra [label=Insert fontsize=9 style=bold]
+	elt_label [label="PHASE 2: ELT
+(Databricks + Spark)" fillcolor="#f3e5f5" shape=note style=filled]
+	extract_elt [label="Extract
+
+Read Cassandra
+Spark Connector
+Direct query" fillcolor="#f3e5f5"]
+	load_bronze [label="Load (Bronze)
+
+Raw ingestion
+Add metadata
+_ingestion_date
+_source_system" fillcolor="#f3e5f5"]
+	transform_silver [label="Transform (Silver)
+
+Clean data
+Remove duplicates
+Normalize text
+Extract year" fillcolor="#f3e5f5"]
+	transform_gold [label="Transform (Gold)
+
+Aggregations
+Dimensions
+Analytics tables
+ML features" fillcolor="#f3e5f5"]
+	cassandra -> extract_elt [label=Read fontsize=9 style=bold]
+	extract_elt -> load_bronze [label=Bronze fontsize=9]
+	load_bronze -> transform_silver [label=Silver fontsize=9]
+	transform_silver -> transform_gold [label=Gold fontsize=9]
+	output_label [label=Outputs fillcolor="#e8f5e9" shape=note style=filled]
+	delta [label="📊 Delta Tables
+
+Query ready
+Dashboard data
+Optimized format" fillcolor="#e8f5e9"]
+	parquet [label="📁 Parquet Export
+
+Standalone files
+Downstream tools
+Python, R, etc." fillcolor="#e8f5e9"]
+	ml [label="🤖 ML Features
+
+Embeddings (384-dim)
+TF-IDF vectors
+Clustering ready" fillcolor="#e8f5e9"]
+	transform_gold -> delta [fontsize=9]
+	transform_gold -> parquet [fontsize=9]
+	transform_gold -> ml [fontsize=9]
+	stats [label="
+    ETL Stats:
+    • Fetch: 500-1000 papers
+    • Validate: 450-950 papers
+    • Quality: 95%
+    • Speed: ~30 sec/100 papers
+    
+    ELT Stats:
+    • Bronze: 18+ rows (raw)
+    • Silver: 18+ rows (clean)
+    • Gold: 8+ tables (analytics)
+    • Duration: ~45 min total
+    " fillcolor="#f5f5f5" fontname=monospace fontsize=8 shape=note]
+}
