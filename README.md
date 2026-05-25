@@ -1400,9 +1400,7 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) for deta
 
 ---
 
-## 📞 Support
 
-- 📧 Email: support@yourdomain.com
 - 🐛 Issues: [GitHub Issues](https://github.com/yourusername/research-papers-pipeline/issues)
 - 💬 Discussions: [GitHub Discussions](https://github.com/yourusername/research-papers-pipeline/discussions)
 
