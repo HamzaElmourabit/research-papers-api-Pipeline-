@@ -11,7 +11,7 @@ A production-grade **ETL + ELT** data engineering pipeline that fetches research
 ---
 ## 🏗️ Architecture du projet
 
-![Architecture](images/architecture_pro (1).png)
+![Architecture](images/architecture_pro.png)
 
 ## 📊 Quick Overview
 
