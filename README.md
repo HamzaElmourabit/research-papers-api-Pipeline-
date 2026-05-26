@@ -2,7 +2,7 @@
 
 [![Python 3.13+](https://img.shields.io/badge/Python-3.13%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![CI/CD](https://github.com/yourusername/research-papers-api/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/yourusername/research-papers-api/actions)
+[![CI/CD](https://github.com/HamzaElmourabit/research-papers-api/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/yourusername/research-papers-api/actions)
 
 A production-grade **ETL + ELT** data engineering pipeline that fetches research papers from arXiv, validates them, stores in Cassandra, and transforms them for analytics using Databricks + Spark.
 
@@ -1400,15 +1400,12 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) for deta
 
 ---
 
-## 📞 Support
 
-- 📧 Email: support@yourdomain.com
 - 🐛 Issues: [GitHub Issues](https://github.com/yourusername/research-papers-pipeline/issues)
 - 💬 Discussions: [GitHub Discussions](https://github.com/yourusername/research-papers-pipeline/discussions)
 
 ---
 
-**Last Updated:** May 25, 2026  
 **Version:** 4.0  
 **Status:** ✅ Production Ready  
 **Maintainers:** Hamza Elmourabit
