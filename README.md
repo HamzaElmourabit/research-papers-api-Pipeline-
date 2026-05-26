@@ -9,7 +9,7 @@ A production-grade **ETL + ELT** data engineering pipeline that fetches research
 **Status:** ✅ Production Ready | **Version:** 4.0 | **Last Updated:** May 25, 2026
 
 ---
-## 🏗️ Architecture du projet
+## 🏗️ Project Architecture
 
 ![Architecture](images/architecture_pro.png)
 
